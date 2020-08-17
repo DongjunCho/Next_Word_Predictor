@@ -1,0 +1,281 @@
+---
+title: "Capstone project milestone Report"
+author: "Dongjun_Cho"
+date: "7/29/2020"
+output: html_document
+---
+## Summary
+This project is Milestone report of the Capstone Project for the Data Science specialization Coursera in collaboration with Swiftkey.
+
+This project uses Swiftkey Dataset from blogs, new sites, and Twitter from [this site](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip).
+
+- en_US.blogs
+- en_US.news
+- en_US.twitter
+
+## Load Data
+
+```r
+## Libraries
+library(tm)
+library(SnowballC)
+library(stringi)
+library(ggplot2) 
+library(wordcloud)
+library(data.table)
+library(dplyr)
+library(kableExtra)
+library(RColorBrewer)
+library(RWeka)
+
+setwd("C:/Users/dongj/Desktop/R_data_Desk/Capstone/Capstone_Project")
+
+# blogs
+blogsFileName <- "data/en_US.blogs.txt"
+con <- file(blogsFileName, open = "r")
+blogs <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+# news
+newsFileName <- "data/en_US.news.txt"
+con <- file(newsFileName, open = "r")
+news <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+# twitter
+twitterFileName <- "data/en_US.twitter.txt"
+con <- file(twitterFileName, open = "r")
+twitter <- readLines(con, encoding = "UTF-8", skipNul = TRUE)
+close(con)
+
+rm(con)
+```
+
+## Basic Data Summary
+
+In this summary, it shows number of lines, number of characters and number of words for each file. It also includes number of words per line (Min, Mean, Max).
+
+
+```r
+numLines <- sapply(list(blogs, news, twitter), length)
+
+numChars <- sapply(list(nchar(blogs), nchar(news), nchar(twitter)), sum)
+
+numWords <- sapply(list(blogs, news, twitter), stri_stats_latex)[4,]
+
+wpl <- lapply(list(blogs, news, twitter), function(x) stri_count_words(x))
+
+wplSummary = sapply(list(blogs, news, twitter),
+             function(x) summary(stri_count_words(x))[c('Min.', 'Mean', 'Max.')])
+rownames(wplSummary) = c('WPL.Min', 'WPL.Mean', 'WPL.Max')
+
+summary <- data.frame(
+    File =c(blogsFileName, newsFileName, twitterFileName), 
+    Lines = numLines,
+    Characters = numChars,
+    Words = numWords,
+    t(rbind(round(wplSummary)))
+)
+
+kable(summary,
+      row.names = FALSE,
+      align = c("l", rep("r", 7)),
+      caption = "") %>% kable_styling(position = "left")
+```
+
+<table class="table" style="">
+<caption></caption>
+ <thead>
+  <tr>
+   <th style="text-align:left;"> File </th>
+   <th style="text-align:right;"> Lines </th>
+   <th style="text-align:right;"> Characters </th>
+   <th style="text-align:right;"> Words </th>
+   <th style="text-align:right;"> WPL.Min </th>
+   <th style="text-align:right;"> WPL.Mean </th>
+   <th style="text-align:right;"> WPL.Max </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:left;"> data/en_US.blogs.txt </td>
+   <td style="text-align:right;"> 899288 </td>
+   <td style="text-align:right;"> 206824505 </td>
+   <td style="text-align:right;"> 37570839 </td>
+   <td style="text-align:right;"> 0 </td>
+   <td style="text-align:right;"> 42 </td>
+   <td style="text-align:right;"> 6726 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> data/en_US.news.txt </td>
+   <td style="text-align:right;"> 77259 </td>
+   <td style="text-align:right;"> 15639408 </td>
+   <td style="text-align:right;"> 2651432 </td>
+   <td style="text-align:right;"> 1 </td>
+   <td style="text-align:right;"> 35 </td>
+   <td style="text-align:right;"> 1123 </td>
+  </tr>
+  <tr>
+   <td style="text-align:left;"> data/en_US.twitter.txt </td>
+   <td style="text-align:right;"> 2360148 </td>
+   <td style="text-align:right;"> 162096241 </td>
+   <td style="text-align:right;"> 30451170 </td>
+   <td style="text-align:right;"> 1 </td>
+   <td style="text-align:right;"> 13 </td>
+   <td style="text-align:right;"> 47 </td>
+  </tr>
+</tbody>
+</table>
+
+## Clean Data
+
+In our dataset, there are 3 datasets files (en_US.blogs, en_US.news, en_US.twitter).
+Created en.US.combine that combine 3 datasets files into one files.
+Using en.US.combine dataset, it would be easier and faster to clean the data.
+
+
+```r
+set.seed(1130)
+sampleSize = 0.01
+
+sampleBlogs <- sample(blogs, length(blogs) * sampleSize, replace = FALSE)
+sampleNews <- sample(news, length(news) * sampleSize, replace = FALSE)
+sampleTwitter <- sample(twitter, length(twitter) * sampleSize, replace = FALSE)
+
+sampleBlogs <- iconv(sampleBlogs, "latin1", "ASCII", sub = "")
+sampleNews <- iconv(sampleNews, "latin1", "ASCII", sub = "")
+sampleTwitter <- iconv(sampleTwitter, "latin1", "ASCII", sub = "")
+
+comb <- c(sampleBlogs, sampleNews, sampleTwitter)
+combined <- "data/en_US.combine.txt"
+con <- file(combined, open = "w")
+writeLines(comb, con)
+close(con)
+```
+
+## Corpus Function
+
+This part is to clean, prepare, and build collection of written text which is corpus.
+
+- To clean the data
+  - eliminate all words to lowercase
+  - eliminate punctuation marks
+  - eliminate numbers
+  - Trim whitespace
+  - eliminate English Stop words
+  - Stemming
+  - Create plain Text format
+
+
+```r
+build_corpus <- function (x = comb) {
+    sample_c <- VCorpus(VectorSource(x)) # Create corpus dataset
+    sample_c <- tm_map(sample_c, tolower) # all lowercase
+    sample_c <- tm_map(sample_c, removePunctuation) # Eleminate punctuation
+    sample_c <- tm_map(sample_c, removeNumbers) # Eliminate numbers
+    sample_c <- tm_map(sample_c, stripWhitespace) # Strip Whitespace
+    sample_c <- tm_map(sample_c, removeWords, stopwords("english")) # Eliminate English stop words
+    sample_c <- tm_map(sample_c, stemDocument) # Stem the document
+    sample_c <- tm_map(sample_c, PlainTextDocument) # Create plain text format
+}
+combData <- build_corpus(comb)
+```
+
+
+## Wordcloud
+
+Build wordcloud to represent word frequency in graphically.
+Based on Wordcloud, word "just" has most frequency.
+
+
+```r
+wordcloud(combData, max.words =100,min.freq=3,scale=c(4,.5), 
+           random.order = FALSE,rot.per=.5,vfont=c("sans serif","plain"),colors=brewer.pal(8, "Dark2"))
+```
+
+![plot of chunk unnamed-chunk-5](figure/unnamed-chunk-5-1.png)
+
+
+
+## N-Grams
+
+Since we already clean our data, we need to convert our dataset into N-gram format from Natural Language Processing (NLP). N-gram is the simplest model that assign probabilities to sentences and sequences of words.
+
+We used RWeka package to construct functions that tokenize the dataset and construct matrices of uniqrams, bigrams, and trigrams.
+
+In our graph, it shows Top 20 most common words.
+
+
+```r
+unigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+bigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+trigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+```
+
+### Unigram
+
+```r
+unigramMatrix <- TermDocumentMatrix(combData, control = list(tokenize = unigramTokenizer))
+unigramterm <- findFreqTerms(unigramMatrix, lowfreq = 5)
+unigramfreq <- rowSums(as.matrix(unigramMatrix[unigramterm,]))
+unigramfreq <- data.frame(unigram=names(unigramfreq), frequency=unigramfreq)
+unigramfreq <- unigramfreq[order(-unigramfreq$frequency),]
+unigramMatrixlist <-setDT(unigramfreq)
+saveRDS(unigramMatrixlist, "data/unigram.RData")
+```
+
+### Unigram Graph
+
+```r
+ggplot(unigramMatrixlist[1:20,], aes(x=reorder(unigram,-frequency), y=frequency)) +
+    geom_bar(stat= "identity", fill = I("grey50")) + theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5))+ labs(title="Top 20 Most Common Unigram", x="", y="Frequency")
+```
+
+![plot of chunk unnamed-chunk-8](figure/unnamed-chunk-8-1.png)
+
+### Bigram
+
+```r
+bigramMatrix <- TermDocumentMatrix(combData, control = list(tokenize = bigramTokenizer))
+bigramterm <- findFreqTerms(bigramMatrix, lowfreq = 3)
+bigramfreq <- rowSums(as.matrix(bigramMatrix[bigramterm,]))
+bigramfreq <- data.frame(bigram=names(bigramfreq), frequency=bigramfreq)
+bigramfreq <- bigramfreq[order(-bigramfreq$frequency),]
+bigramMatrixlist <-setDT(bigramfreq)
+saveRDS(bigramMatrixlist, "data/bigram.RData")
+```
+
+### Bigram Graph
+
+```r
+ggplot(bigramMatrixlist[1:20,], aes(x=reorder(bigram,-frequency), y=frequency)) +
+    geom_bar(stat= "identity", fill = I("grey50"))+  theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5))+ labs(title="Top 20 Most Common Bigram", x="", y="Frequency")
+```
+
+![plot of chunk unnamed-chunk-10](figure/unnamed-chunk-10-1.png)
+
+### Trigram
+
+```r
+trigramMatrix <- TermDocumentMatrix(combData, control = list(tokenize = trigramTokenizer))
+trigramterm <- findFreqTerms(trigramMatrix, lowfreq = 2)
+trigramfreq <- rowSums(as.matrix(trigramMatrix[trigramterm,]))
+trigramfreq <- data.frame(trigram=names(trigramfreq), frequency=trigramfreq)
+trigramfreq <- trigramfreq[order(-trigramfreq$frequency),]
+trigramMatrixlist <-setDT(trigramfreq)
+saveRDS(trigramMatrixlist, "data/trigram.RData")
+```
+
+### Trigram Graph
+
+```r
+ggplot(trigramMatrixlist[1:20,], aes(x=reorder(trigram,-frequency), y=frequency)) +
+    geom_bar(stat= "identity", fill = I("grey50"))+     theme(axis.text.x=element_text(angle=90, hjust=1, vjust=0.5))+ labs(title="Top 20 Most Common Trigram", x="", y="Frequency")
+```
+
+![plot of chunk unnamed-chunk-12](figure/unnamed-chunk-12-1.png)
+
+## Conclusion
+This Capstone project milestone Report is just initial exploratory analysis to build predictive model.
+Based on Data from exploratory analysis, we will build a predictive algorithm using data we analyzed.
+Goal of this capstone is building the predictive models with Shiny application with user interface.
